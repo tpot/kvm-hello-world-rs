@@ -1,7 +1,7 @@
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use nix::{
-    fcntl, 
+    fcntl,
     fcntl::OFlag,
     sys::stat::Mode,
     ioctl_none_bad,
