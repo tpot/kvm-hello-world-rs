@@ -18,6 +18,7 @@ const KVM_DEVICE: &str = "/dev/kvm";
 // Unfortunately the kvm_bindings crate does not export ioctl sequence numbers
 // so we must hardcode them and use "bad" ioctls.
 ioctl_none_bad!(kvm_get_api_version, request_code_none!(KVMIO, 0x00));
+ioctl_none_bad!(kvm_create_vm,       request_code_none!(KVMIO, 0x01));
 
 fn main() {
 
@@ -50,4 +51,20 @@ fn main() {
     };
 
     println!("KVM API version = {api_ver}");
+
+    // Create a VM
+    let kvm_vm_fd: OwnedFd = match unsafe {
+        kvm_create_vm(kvm_fd.as_raw_fd())
+    } {
+        Ok(fd) => unsafe {
+            assert!(fd != -1);
+            FromRawFd::from_raw_fd(fd)
+        },
+        Err(errno) => {
+            eprintln!("Error creating VM: {errno}");
+            std::process::exit(1);
+        },
+    };
+
+    println!("kvm_vm_fd = {0}", AsRawFd::as_raw_fd(&kvm_vm_fd));
 }
