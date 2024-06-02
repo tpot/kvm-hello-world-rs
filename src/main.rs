@@ -17,6 +17,7 @@ use nix::{
     fcntl::OFlag,
     sys::stat::Mode,
     ioctl_none_bad,
+    ioctl_write_ptr,
     request_code_none,
     sys::{mman, mman::MapFlags, mman::ProtFlags},
 };
@@ -25,6 +26,7 @@ use nix::{
 use kvm_bindings::{
     KVMIO,
     KVM_API_VERSION,
+    kvm_userspace_memory_region,
     kvm_run,
 };
 
@@ -36,6 +38,8 @@ ioctl_none_bad!(kvm_get_api_version,    request_code_none!(KVMIO, 0x00));
 ioctl_none_bad!(kvm_create_vm,          request_code_none!(KVMIO, 0x01));
 ioctl_none_bad!(kvm_create_vcpu,        request_code_none!(KVMIO, 0x41));
 ioctl_none_bad!(kvm_get_vcpu_mmap_size, request_code_none!(KVMIO, 0x04));
+
+ioctl_write_ptr!(kvm_set_user_memory_region, KVMIO, 0x46, kvm_userspace_memory_region);
 
 fn main() {
 
@@ -84,6 +88,45 @@ fn main() {
     };
 
     println!("kvm_vm_fd = {0}", AsRawFd::as_raw_fd(&kvm_vm_fd));
+
+    // Set user memory region
+    const MAP_SIZE: usize = 0x1000;
+
+    let user_memory = match unsafe {
+        mman::mmap_anonymous(
+            None,
+            NonZeroUsize::new(MAP_SIZE).expect("User memory size is zero"),
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+            MapFlags::MAP_ANONYMOUS | MapFlags::MAP_SHARED,
+        )
+    } {
+        Ok(result) => {
+            result.as_ptr() as u64
+        },
+        Err(errno) => {
+            eprintln!("Error calling mmap(): {errno}");
+            std::process::exit(1);
+        },
+    };
+
+    match unsafe {
+        kvm_set_user_memory_region(
+            AsRawFd::as_raw_fd(&kvm_vm_fd),
+            &kvm_userspace_memory_region {
+                slot: 0,
+                flags: 0,
+                guest_phys_addr: 0,
+                memory_size: MAP_SIZE as u64,
+                userspace_addr: user_memory,
+            },
+        )
+    } {
+        Ok(_) => { }
+        Err(errno) => {
+            eprintln!("Error calling mmap(): {errno}");
+            std::process::exit(1);
+        },
+    };
 
     // Create a vCPU for the VM
     let kvm_vcpu_fd: OwnedFd = match unsafe {
