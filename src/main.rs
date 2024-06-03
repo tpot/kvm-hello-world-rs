@@ -48,6 +48,12 @@ struct Vm {
     mem: u64,
 }
 
+struct Vcpu<'a> {
+    vm: &'a Vm,
+    vcpu_fd: OwnedFd,
+    kvm_run: *mut kvm_run,
+}
+
 impl Vm {
 
     // Create new VM
@@ -129,58 +135,62 @@ impl Vm {
     }
 }
 
+impl<'a> Vcpu<'a> {
+
+    pub fn new(vm: &'a Vm) -> Result<Self, nix::Error> {
+
+        // Create a vCPU for the VM
+        let vcpu_fd: OwnedFd = match unsafe {
+            kvm_create_vcpu(AsRawFd::as_raw_fd(&vm.vm_fd))
+        } {
+            Ok(fd) => unsafe {
+                assert!(fd != -1);
+                FromRawFd::from_raw_fd(fd)
+            },
+            Err(errno) => return Err(errno),
+        };
+
+        println!("kvm_vcpu_fd = {0}", AsRawFd::as_raw_fd(&vcpu_fd));
+
+        // Create kvm_run struct for this VCPU
+        let vcpu_mmap_size: NonZeroUsize = match unsafe {
+            kvm_get_vcpu_mmap_size(AsRawFd::as_raw_fd(&vm.sys_fd))
+        } {
+            Ok(result) => {
+                NonZeroUsize::new(result as usize).expect("mmap_size is zero")
+            },
+            Err(errno) => return Err(errno),
+        };
+
+        println!("vcpu_mmap_size = {vcpu_mmap_size}");
+
+        let kvm_run: *mut kvm_run = match unsafe {
+            mman::mmap(
+                None,
+                vcpu_mmap_size,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                MapFlags::MAP_SHARED,
+                &vcpu_fd,
+                0,
+            )
+        } {
+            Ok(result) => {
+                result.as_ptr() as *mut kvm_run
+            },
+            Err(errno) => return Err(errno),
+        };
+
+        Ok(Self{
+            vm,
+            vcpu_fd,
+            kvm_run,
+        })
+    }
+}
+
 fn main() {
 
     // Initialise VM
     let vm = Vm::new().expect("Unable to initialise VM");
-
-    // Create a vCPU for the VM
-    let kvm_vcpu_fd: OwnedFd = match unsafe {
-        kvm_create_vcpu(AsRawFd::as_raw_fd(&vm.vm_fd))
-    } {
-        Ok(fd) => unsafe {
-            assert!(fd != -1);
-            FromRawFd::from_raw_fd(fd)
-        },
-        Err(errno) => {
-            eprintln!("Error creating VCPU: {errno}");
-            std::process::exit(1);
-        },
-    };
-
-    println!("kvm_vcpu_fd = {0}", AsRawFd::as_raw_fd(&kvm_vcpu_fd));
-
-    // Create kvm_run structure
-    let vcpu_mmap_size: NonZeroUsize = match unsafe {
-        kvm_get_vcpu_mmap_size(AsRawFd::as_raw_fd(&vm.sys_fd))
-    } {
-        Ok(result) => {
-            NonZeroUsize::new(result as usize).expect("mmap_size is zero")
-        },
-        Err(errno) => {
-            eprintln!("Error getting VCPU mmap() size: {errno}");
-            std::process::exit(1);
-        },
-    };
-
-    println!("vcpu_mmap_size = {vcpu_mmap_size}");
-
-    let _kvm_run: *mut kvm_run = match unsafe {
-        mman::mmap(
-            None,
-            vcpu_mmap_size,
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-            MapFlags::MAP_SHARED,
-            kvm_vcpu_fd,
-            0,
-        )
-    } {
-        Ok(result) => {
-            result.as_ptr() as *mut kvm_run
-        },
-        Err(errno) => {
-            eprintln!("Error calling mmap(): {errno}");
-            std::process::exit(1);
-        },
-    };
+    let _vcpu = Vcpu::new(&vm).expect("Unable to create VCPU");
 }
