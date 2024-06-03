@@ -32,7 +32,8 @@ use kvm_bindings::{
     kvm_run,
     kvm_regs,
     kvm_sregs,
-    KVM_EXIT_INTERNAL_ERROR,
+    KVM_EXIT_HLT,
+    KVM_EXIT_IO,
 };
 
 const KVM_DEVICE: &str = "/dev/kvm";
@@ -128,7 +129,7 @@ impl Vm {
                 &kvm_userspace_memory_region {
                     slot: 0,
                     flags: 0,
-                    guest_phys_addr: 0,
+                    guest_phys_addr: 0x1000,
                     memory_size: MAP_SIZE as u64,
                     userspace_addr: mem,
                 },
@@ -227,23 +228,54 @@ impl<'a> Vcpu<'a> {
         }
     }
 
-    pub fn run_vm(&self) -> Result<(), nix::Error> {
+    pub fn run_vm(&self) -> Result<(), nix::Error>
+    {
+        // Some code to perform some IO and halt, copied from https://lwn.net/Articles/658511/
+        let code:[u8; 12]  = [
+            0xba, 0xf8, 0x03, /* mov $0x3f8, %dx */
+            0x00, 0xd8,       /* add %bl, %al */
+            0x04, 0x30,       /* add $'0', %al */
+            0xee,             /* out %al, (%dx) */
+            0xb0, 0x0a,       /* mov $'\n', %al */
+            0xee,             /* out %al, (%dx) */
+            0xf4,             /* hlt */
+        ];
 
-        // Call kvm_run()
-        match unsafe {
-            kvm_run(AsRawFd::as_raw_fd(&self.vcpu_fd), 0)
-        } {
-            Ok(_) => { },
-            Err(errno) => return Err(errno),
+        // Copy code into VM memory
+        unsafe {
+            std::ptr::copy_nonoverlapping(code.as_ptr(), self.vm.mem as *mut u8, code.len());
         };
 
-        let exit_reason = unsafe { (*self.kvm_run).exit_reason };
-        println!("exit_reason = {0}", exit_reason);
+        loop {
 
-        if (exit_reason == KVM_EXIT_INTERNAL_ERROR) {
-            let suberror = unsafe { (*self.kvm_run).__bindgen_anon_1.internal.suberror };
-            println!("suberror = {0}", suberror);
-        }
+            // Call kvm_run()
+            match unsafe {
+                kvm_run(AsRawFd::as_raw_fd(&self.vcpu_fd), 0)
+            } {
+                Ok(_) => { },
+                Err(errno) => return Err(errno),
+            };
+
+            // Check exit reason
+            match unsafe {
+                (*self.kvm_run).exit_reason
+            } {
+                KVM_EXIT_IO => {
+                    let io_info = unsafe { (*self.kvm_run).__bindgen_anon_1.io };
+                    println!("I/O dir={0} port={1:#02x} size={2} count={3}",
+                        io_info.direction, io_info.port, io_info.size, io_info.count);
+                },
+                KVM_EXIT_HLT => {
+                    println!("Program halted");
+                    break;
+                }
+                x => {
+                    println!("Unknown exit reason, {x}");
+                    return Ok(());
+                }
+            };
+
+        };
 
         Ok(())
     }
@@ -258,8 +290,10 @@ impl<'a> Vcpu<'a> {
 
         let mut regs: kvm_regs = Default::default();
 
-        regs.rflags = 2;
-        regs.rip = 0;
+        regs.rip = 0x1000;
+        regs.rax = 2;
+        regs.rbx = 2;
+        regs.rflags = 0x02;
 
         self.set_regs(&regs).unwrap();
 
