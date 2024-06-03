@@ -114,7 +114,7 @@ impl Vm {
                 None,
                 NonZeroUsize::new(MAP_SIZE).expect("User memory size is zero"),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                MapFlags::MAP_ANONYMOUS | MapFlags::MAP_SHARED,
+                MapFlags::MAP_SHARED,
             )
         } {
             Ok(result) => {
