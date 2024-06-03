@@ -2,7 +2,26 @@
 
 Port of
 [kvm-hello-world.c](https://github.com/dpw/kvm-hello-world/blob/master/kvm-hello-world.c)
-to Rust.
+to Rust. It turns out that the C version didn't load any code so I modified my
+version to run some sample code from [Using the KVM
+API](https://lwn.net/Articles/658511/) article on lwn.net.
+
+## Usage
+
+```
+$ cargo run
+   Compiling kvm-hello-world-rs v0.1.0 (/home/tpot/repos/kvm-hello-world-rs)
+    Finished dev [unoptimized + debuginfo] target(s) in 0.38s
+     Running `target/debug/kvm-hello-world-rs`
+sys_fd = 3
+KVM API version = 12
+vm_fd = 4
+kvm_vcpu_fd = 5
+vcpu_mmap_size = 12288
+I/O dir=1 port=0x3f8 size=1 count=1
+I/O dir=1 port=0x3f8 size=1 count=1
+Program halted
+```
 
 ## Resources
 
