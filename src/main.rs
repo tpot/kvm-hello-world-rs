@@ -18,6 +18,7 @@ use nix::{
     sys::stat::Mode,
     ioctl_none_bad,
     ioctl_read,
+    ioctl_write_int_bad,
     ioctl_write_ptr,
     request_code_none,
     sys::{mman, mman::MapFlags, mman::ProtFlags},
@@ -31,6 +32,7 @@ use kvm_bindings::{
     kvm_run,
     kvm_regs,
     kvm_sregs,
+    KVM_EXIT_INTERNAL_ERROR,
 };
 
 const KVM_DEVICE: &str = "/dev/kvm";
@@ -44,6 +46,8 @@ ioctl_none_bad!(kvm_create_vcpu,        request_code_none!(KVMIO, 0x41));
 ioctl_none_bad!(kvm_get_vcpu_mmap_size, request_code_none!(KVMIO, 0x04));
 
 ioctl_write_ptr!(kvm_set_user_memory_region, KVMIO, 0x46, kvm_userspace_memory_region);
+
+ioctl_write_int_bad!(kvm_run, request_code_none!(KVMIO, 0x80));
 
 ioctl_write_ptr!(kvm_set_regs,  KVMIO, 0x82, kvm_regs);
 ioctl_read!(kvm_get_sregs,      KVMIO, 0x83, kvm_sregs);
@@ -222,11 +226,52 @@ impl<'a> Vcpu<'a> {
             Err(errno) => Err(errno),
         }
     }
+
+    pub fn run_vm(&self) -> Result<(), nix::Error> {
+
+        // Call kvm_run()
+        match unsafe {
+            kvm_run(AsRawFd::as_raw_fd(&self.vcpu_fd), 0)
+        } {
+            Ok(_) => { },
+            Err(errno) => return Err(errno),
+        };
+
+        let exit_reason = unsafe { (*self.kvm_run).exit_reason };
+        println!("exit_reason = {0}", exit_reason);
+
+        if (exit_reason == KVM_EXIT_INTERNAL_ERROR) {
+            let suberror = unsafe { (*self.kvm_run).__bindgen_anon_1.internal.suberror };
+            println!("suberror = {0}", suberror);
+        }
+
+        Ok(())
+    }
+
+    pub fn run_real_mode(&self) -> Result<(), nix::Error> {
+        let mut sregs: kvm_sregs = self.get_sregs().unwrap();
+
+        sregs.cs.selector = 0;
+        sregs.cs.base = 0;
+
+        self.set_sregs(&sregs).unwrap();
+
+        let mut regs: kvm_regs = Default::default();
+
+        regs.rflags = 2;
+        regs.rip = 0;
+
+        self.set_regs(&regs).unwrap();
+
+        return self.run_vm();
+    }
 }
 
 fn main() {
 
     // Initialise VM
     let vm = Vm::new().expect("Unable to initialise VM");
-    let _vcpu = Vcpu::new(&vm).expect("Unable to create VCPU");
+    let vcpu = Vcpu::new(&vm).expect("Unable to create VCPU");
+
+    vcpu.run_real_mode().expect("Error running VM");
 }
